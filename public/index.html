@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Secure Access Portal</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="auth-view" class="card">
+        <div class="brand-block">
+          <p class="eyebrow">mukulp+divya Role-Based Authentication</p>
+          <h1>Secure Access Portal</h1>
+          <p>Sign in or create an account to reach the right dashboard.</p>
+        </div>
+
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-target="login">Login</button>
+          <button class="tab" data-target="register">Register</button>
+        </div>
+
+        <form id="login-form" class="auth-form">
+          <label>
+            Username
+            <input type="text" name="username" placeholder="Enter username" required />
+          </label>
+          <label>
+            Password
+            <input type="password" name="password" placeholder="Enter password" required />
+          </label>
+          <button type="submit">Sign In</button>
+        </form>
+
+        <form id="register-form" class="auth-form hidden">
+          <label>
+            Username
+            <input type="text" name="username" placeholder="Choose username" required />
+          </label>
+          <label>
+            Password
+            <input type="password" name="password" placeholder="Choose password" required />
+          </label>
+          <button type="submit">Create Account</button>
+        </form>
+
+        <p id="message" class="message" aria-live="polite"></p>
+      </section>
+
+      <section id="dashboard-view" class="card hidden">
+        <div class="dashboard-header">
+          <div>
+            <p class="eyebrow">Signed in as</p>
+            <h2 id="welcome-name"></h2>
+          </div>
+          <button id="logout-btn" class="ghost-btn">Log Out</button>
+        </div>
+        <div id="dashboard-content"></div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
