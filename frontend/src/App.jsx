@@ -1,41 +1,34 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 
-async function fetchJson(url, options, fallbackMessage) {
+
+async function fetchJson(url, options = {}, fallbackMessage = 'Request failed.') {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(getErrorMessage(data, fallbackMessage));
+    throw new Error(data?.detail || data?.error || fallbackMessage);
   }
   return data;
 }
 
-function postJson(url, payload, fallbackMessage) {
+
+function postJson(url, payload, fallbackMessage, method = 'POST') {
   return fetchJson(url, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   }, fallbackMessage);
 }
 
-function buildLineChart(values, width = 280, height = 140) {
-  if (!values.length) {
-    return (
-      <div className="chart-empty" role="img" aria-label="No usage data available">
-        No usage data available yet.
-      </div>
-    );
-  }
 
+function buildLineChart(values, width = 280, height = 140) {
+  if (!values.length) return <div className="chart-empty">No usage data available.</div>;
   const padding = 18;
   const max = Math.max(...values);
-  const points = values
-    .map((value, index) => {
-      const x = padding + (index * (width - padding * 2)) / (values.length - 1);
-      const y = height - padding - (value / max) * (height - padding * 2);
-      return `${x},${y}`;
-    })
-    .join(' ');
-
+  const points = values.map((value, index) => {
+    const x = padding + (index * (width - padding * 2)) / (values.length - 1);
+    const y = height - padding - (value / max) * (height - padding * 2);
+    return `${x},${y}`;
+  }).join(' ');
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label="Energy usage trend">
       <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} />
@@ -45,554 +38,534 @@ function buildLineChart(values, width = 280, height = 140) {
   );
 }
 
-function buildBarChart(values) {
-  if (!values.length) {
-    return (
-      <div className="chart-empty" role="img" aria-label="No usage data available">
-        No usage data available yet.
-      </div>
-    );
-  }
 
+function buildBarChart(values) {
+  if (!values.length) return <div className="chart-empty">No usage data available.</div>;
   const max = Math.max(...values);
   return (
-    <div
-      className="bar-chart"
-      role="img"
-      aria-label={`Daily consumption comparison: ${values
-        .map((value, index) => `day ${index + 1}, ${value} kilowatt-hours`)
-        .join('; ')}`}
-    >
-      {values.map((value, index) => {
-        const barHeight = Math.max(12, (value / max) * 100);
-        return (
-          <div className="bar-item" key={index} aria-hidden="true">
-            <span className="bar-value">{value}</span>
-            <div className="bar-column">
-              <span style={{ height: `${barHeight}%` }} />
-            </div>
-            <span className="bar-label">D{index + 1}</span>
-          </div>
-        );
-      })}
+    <div className="bar-chart" role="img" aria-label="Daily energy consumption comparison">
+      {values.map((value, index) => (
+        <div className="bar-item" key={index} aria-hidden="true">
+          <span className="bar-value">{value}</span>
+          <div className="bar-column"><span style={{ height: `${Math.max(12, (value / max) * 100)}%` }} /></div>
+          <span className="bar-label">D{index + 1}</span>
+        </div>
+      ))}
     </div>
   );
 }
 
-const ProfileCard = memo(function ProfileCard({ data }) {
-  const p = data.profile || {};
-  const usage = Array.isArray(p.usage) ? p.usage : [];
 
+const ProfileCard = memo(function ProfileCard({ data }) {
+  const profile = data.profile || {};
+  const usage = Array.isArray(profile.usage) ? profile.usage : [];
   return (
     <div className="page-detail-card detail-card">
       <div className="detail-grid page-detail-grid">
-        <div>
-          <p className="eyebrow">Meter ID</p>
-          <strong>{p.meterId}</strong>
-        </div>
-        <div>
-          <p className="eyebrow">Location</p>
-          <strong>{p.location}</strong>
-        </div>
-        <div>
-          <p className="eyebrow">Tariff</p>
-          <strong>{p.tariff}</strong>
-        </div>
-        <div>
-          <p className="eyebrow">Voltage</p>
-          <strong>{p.voltage}</strong>
-        </div>
+        <div><p className="eyebrow">Meter ID</p><strong>{profile.meterId}</strong></div>
+        <div><p className="eyebrow">Location</p><strong>{profile.location}</strong></div>
+        <div><p className="eyebrow">Tariff</p><strong>{profile.tariff}</strong></div>
+        <div><p className="eyebrow">Voltage</p><strong>{profile.voltage}</strong></div>
       </div>
-
       <div className="detail-header">
-        <div>
-          <p className="eyebrow">Status</p>
-          <h3>{p.status}</h3>
-        </div>
+        <div><p className="eyebrow">Meter status</p><h3>{profile.status}</h3></div>
         <div className="billing-card page-billing-card">
-          <p className="eyebrow">Estimated monthly bill</p>
-          <h4>${p.billing}</h4>
+          <p className="eyebrow">Estimated monthly bill</p><h4>${profile.billing}</h4>
         </div>
       </div>
-
       <div className="graph-grid page-graph-grid">
-        <div className="graph-card">
-          <h4>Usage Trend</h4>
-          {buildLineChart(usage)}
-        </div>
-        <div className="graph-card">
-          <h4>Daily Load</h4>
-          {buildBarChart(usage)}
-        </div>
+        <div className="graph-card"><h4>Usage Trend</h4>{buildLineChart(usage)}</div>
+        <div className="graph-card"><h4>Daily Load</h4>{buildBarChart(usage)}</div>
       </div>
-
       <div className="usage-summary">
-        {usage.length > 0 ? usage.map((value, index) => (
-          <div className="usage-pill" key={`${p.meterId}-${index}`}>
-            <span>Day {index + 1}</span>
-            <strong>{value} kWh</strong>
+        {usage.map((value, index) => (
+          <div className="usage-pill" key={`${profile.meterId}-${index}`}>
+            <span>Day {index + 1}</span><strong>{value} kWh</strong>
           </div>
-        )) : (
-          <p className="search-hint">Usage details will appear once meter data is available.</p>
-        )}
+        ))}
       </div>
     </div>
   );
 });
 
-function getErrorMessage(responseData, fallback) {
-  return responseData?.detail || responseData?.error || fallback;
+
+function UtilitiesDashboard({ data }) {
+  return (
+    <div className="panel wide-panel">
+      <div className="page-heading">
+        <div><p className="eyebrow">Utilities workspace</p><h3>Your Meter Account</h3></div>
+        <span className="access-badge">Personal data only</span>
+      </div>
+      <p className="search-hint">Welcome back, <strong>{data.username}</strong>. This page contains only your utility account.</p>
+      <ProfileCard data={data} />
+    </div>
+  );
 }
 
-function App() {
-  const [authView, setAuthView] = useState(true);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [view, setView] = useState('home');
-  const [message, setMessage] = useState('');
-  const [activeTab, setActiveTab] = useState('login');
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [profileData, setProfileData] = useState(null);
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedUser, setSelectedUser] = useState(null);
-  const [profileLoading, setProfileLoading] = useState(false);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const detailRequest = useRef(null);
 
-  const settingsItems = useMemo(() => {
-    const items = [
-      { key: 'home', label: 'Home / Search' },
-      { key: 'password', label: 'Change Password' }
-    ];
-    if (currentUser?.role === 'admin') {
-      items.push({ key: 'create-admin', label: 'Create New Admin' });
-      items.push({ key: 'promote-user', label: 'Promote Existing User' });
-    }
-    return items;
-  }, [currentUser]);
+function SalesDashboard({ data }) {
+  const totalRevenue = data.records.reduce((sum, row) => sum + row.revenue, 0);
+  const totalUsage = data.records.reduce((sum, row) => sum + row.usageMwh, 0);
+  return (
+    <div className="panel wide-panel">
+      <div className="page-heading">
+        <div><p className="eyebrow">Sales workspace</p><h3>{data.region} Region</h3></div>
+        <span className="access-badge">Region restricted</span>
+      </div>
+      <div className="stat-grid">
+        <div className="stat-card"><span>Accounts</span><strong>{data.records.length}</strong></div>
+        <div className="stat-card"><span>Usage</span><strong>{totalUsage.toLocaleString()} MWh</strong></div>
+        <div className="stat-card"><span>Revenue</span><strong>${totalRevenue.toLocaleString()}</strong></div>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Customer</th><th>Utility</th><th>Usage</th><th>Revenue</th><th>Status</th></tr></thead>
+          <tbody>
+            {data.records.map((row) => (
+              <tr key={row.id}>
+                <td><strong>{row.customerName}</strong></td><td>{row.utilityType}</td>
+                <td>{row.usageMwh.toLocaleString()} MWh</td><td>${row.revenue.toLocaleString()}</td>
+                <td><span className="status-chip">{row.status}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="privacy-note">Your region is assigned by an administrator. Other regional records are blocked by the server.</p>
+    </div>
+  );
+}
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchJson('/api/me', { signal: controller.signal }, 'Unable to restore session.')
-      .then((data) => {
-        if (data.authenticated) {
-          setCurrentUser(data.user);
-          setAuthView(false);
-          setView('home');
-        }
-      })
-      .catch(() => {});
 
-    return () => controller.abort();
-  }, []);
+function AnalystDashboard({ data }) {
+  return (
+    <div className="panel wide-panel">
+      <div className="page-heading">
+        <div><p className="eyebrow">Business intelligence</p><h3>Regional Performance</h3></div>
+        <span className="access-badge">Aggregate data only</span>
+      </div>
+      <div className="stat-grid">
+        <div className="stat-card"><span>Total accounts</span><strong>{data.totals.accounts}</strong></div>
+        <div className="stat-card"><span>Total usage</span><strong>{data.totals.usageMwh.toLocaleString()} MWh</strong></div>
+        <div className="stat-card"><span>Total revenue</span><strong>${data.totals.revenue.toLocaleString()}</strong></div>
+      </div>
+      <div className="analytics-grid">
+        {data.regions.map((region) => (
+          <article className="region-card" key={region.region}>
+            <p className="eyebrow">Region</p><h4>{region.region}</h4>
+            <dl>
+              <div><dt>Accounts</dt><dd>{region.accounts}</dd></div>
+              <div><dt>Active</dt><dd>{region.activeAccounts}</dd></div>
+              <div><dt>Usage</dt><dd>{region.usageMwh.toLocaleString()} MWh</dd></div>
+              <div><dt>Revenue</dt><dd>${region.revenue.toLocaleString()}</dd></div>
+            </dl>
+          </article>
+        ))}
+      </div>
+      <p className="privacy-note">{data.privacyNote}</p>
+    </div>
+  );
+}
 
-  useEffect(() => {
-    if (!currentUser) {
-      setProfileData(null);
-      setSearchResults([]);
-      setSearchQuery('');
-      setSelectedUser(null);
-      setProfileLoading(false);
-      setSearchLoading(false);
-      return;
-    }
 
-    setMessage('');
-    setSelectedUser(null);
+function RoleFields({ role, region, regions, onRoleChange, onRegionChange }) {
+  return (
+    <>
+      <label>Role
+        <select name="role" value={role} onChange={onRoleChange}>
+          <option value="utilities">Utilities</option>
+          <option value="business_analyst">Business Analyst</option>
+          <option value="sales_person">Sales Person</option>
+        </select>
+      </label>
+      {role === 'sales_person' && (
+        <label>Sales region
+          <select name="region" value={region} onChange={onRegionChange} required>
+            {regions.map((item) => <option value={item} key={item}>{item}</option>)}
+          </select>
+        </label>
+      )}
+    </>
+  );
+}
 
-    if (currentUser.role === 'admin') {
-      setProfileData(null);
-      setProfileLoading(false);
-      setSearchQuery('');
-      setSearchResults([]);
-      setSearchLoading(false);
-      return;
-    }
 
-    const controller = new AbortController();
-    setProfileLoading(true);
-    fetchJson('/api/me/profile', { signal: controller.signal }, 'Unable to load profile.')
-      .then((data) => {
-        setProfileData(data);
-      })
-      .catch((error) => {
-        if (error.name !== 'AbortError') {
-          setProfileData(null);
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setProfileLoading(false);
-        }
-      });
+function ManagedAccount({ account, regions, onSaved, onDeleted }) {
+  const [role, setRole] = useState(account.role);
+  const [region, setRegion] = useState(account.region || regions[0] || 'texas');
+  const [saving, setSaving] = useState(false);
+  const [rowMessage, setRowMessage] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
-    return () => controller.abort();
-  }, [currentUser]);
-
-  useEffect(() => {
-    if (!currentUser || currentUser.role !== 'admin') {
-      return;
-    }
-
-    const query = searchQuery.trim();
-    if (!query) {
-      setSearchResults([]);
-      setSearchLoading(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    setSearchLoading(true);
-    const timeout = setTimeout(() => {
-      fetchJson(
-        `/api/users/search?q=${encodeURIComponent(query)}`,
-        { signal: controller.signal },
-        'Unable to search users.'
-      )
-        .then((data) => {
-          setSearchResults(Array.isArray(data) ? data : []);
-        })
-        .catch((error) => {
-          if (error.name !== 'AbortError') {
-            setSearchResults([]);
-          }
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) {
-            setSearchLoading(false);
-          }
-        });
-    }, 180);
-
-    return () => {
-      clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [currentUser, searchQuery]);
-
-  function loadUserDetail(username) {
-    detailRequest.current?.abort();
-    const controller = new AbortController();
-    detailRequest.current = controller;
-    setSelectedUser(username);
-    setProfileData(null);
-    setMessage('');
-    fetchJson(
-      `/api/users/detail?username=${encodeURIComponent(username)}`,
-      { signal: controller.signal },
-      'Unable to load user details.'
-    )
-      .then((data) => {
-        setProfileData(data);
-      })
-      .catch((error) => {
-        if (error.name !== 'AbortError') {
-          setMessage(error.message);
-          setSelectedUser(null);
-        }
-      })
-      .finally(() => {
-        if (detailRequest.current === controller) {
-          detailRequest.current = null;
-        }
-      });
-  }
-
-  function handleSearch(event) {
-    setSearchQuery(event.target.value);
-  }
-
-  async function handleLogin(event) {
+  async function save(event) {
     event.preventDefault();
-    const formData = new FormData(event.target);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const payload = {
-      username: formData.get('username'),
-      password: formData.get('password')
+      username: form.get('username'),
+      password: form.get('password') || null,
+      role,
+      region: role === 'sales_person' ? region : null
     };
+    setSaving(true);
+    setRowMessage('');
     try {
-      const data = await postJson('/api/login', payload, 'Login failed.');
-      setCurrentUser(data.user);
-      setAuthView(false);
-      setView('home');
-      setMessage('');
+      const result = await postJson(`/api/admin/users/${account.id}`, payload, 'Unable to update account.', 'PUT');
+      setRowMessage('Saved');
+      formElement.elements.password.value = '';
+      onSaved(result.user);
     } catch (error) {
-      setMessage(error.message);
+      setRowMessage(error.message);
+    } finally {
+      setSaving(false);
     }
   }
 
-  async function handleRegister(event) {
-    event.preventDefault();
-    const formData = new FormData(event.target);
-    const payload = {
-      username: formData.get('username'),
-      password: formData.get('password')
-    };
-    try {
-      const data = await postJson('/api/register', payload, 'Registration failed.');
-      setCurrentUser(data.user);
-      setAuthView(false);
-      setView('home');
-      setMessage('');
-    } catch (error) {
-      setMessage(error.message);
-    }
+  function openDeleteDialog() {
+    setDeleteConfirmation('');
+    setDeleteError('');
+    setDeleteOpen(true);
   }
 
-  async function handleLogout() {
-    detailRequest.current?.abort();
-    await fetch('/api/logout', { method: 'POST' });
-    setCurrentUser(null);
-    setAuthView(true);
-    setView('home');
-    setSettingsOpen(false);
-    setProfileData(null);
-    setSearchResults([]);
-    setSearchQuery('');
-    setSelectedUser(null);
+  function closeDeleteDialog() {
+    if (!deleting) setDeleteOpen(false);
   }
 
-  async function handlePasswordChange(event) {
-    event.preventDefault();
-    const formData = new FormData(event.target);
-    const payload = {
-      oldPassword: formData.get('oldPassword'),
-      newPassword: formData.get('newPassword')
-    };
+  async function deleteAccount() {
+    if (deleteConfirmation !== 'delete') return;
+    setDeleting(true);
+    setDeleteError('');
     try {
-      await postJson('/api/password/change', payload, 'Unable to change password.');
-      setMessage('Password updated successfully.');
-      event.target.reset();
+      await fetchJson(`/api/admin/users/${account.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: deleteConfirmation })
+      }, 'Unable to delete account.');
+      onDeleted(account.id);
     } catch (error) {
-      setMessage(error.message);
-    }
-  }
-
-  async function handleAdminCreate(event) {
-    event.preventDefault();
-    const formData = new FormData(event.target);
-    const payload = {
-      username: formData.get('username'),
-      password: formData.get('password')
-    };
-    try {
-      await postJson('/api/admin/add', payload, 'Unable to add admin.');
-      setMessage('New admin created successfully.');
-      event.target.reset();
-    } catch (error) {
-      setMessage(error.message);
-    }
-  }
-
-  async function handleAdminPromote(event) {
-    event.preventDefault();
-    const formData = new FormData(event.target);
-    const payload = { username: formData.get('username') };
-    try {
-      await postJson('/api/admin/promote', payload, 'Unable to promote user.');
-      setMessage('User promoted to admin successfully.');
-      event.target.reset();
-    } catch (error) {
-      setMessage(error.message);
+      setDeleteError(error.message);
+      setDeleting(false);
     }
   }
 
   return (
-    <main className="app-shell">
-      <section className={`card ${authView ? '' : 'hidden'}`}>
-        <div className="brand-block">
-          <p className="eyebrow">Role-Based Authentication</p>
-          <h1>Secure Access Portal</h1>
-          <p>Sign in or create an account to reach the right dashboard.</p>
-        </div>
-
-        <div className="tabs" role="tablist">
-          <button className={`tab ${activeTab === 'login' ? 'active' : ''}`} onClick={() => setActiveTab('login')}>Login</button>
-          <button className={`tab ${activeTab === 'register' ? 'active' : ''}`} onClick={() => setActiveTab('register')}>Register</button>
-        </div>
-
-        {activeTab === 'login' ? (
-          <form className="auth-form" onSubmit={handleLogin}>
-            <label>
-              Username
-              <input type="text" name="username" placeholder="Enter username" required />
-            </label>
-            <label>
-              Password
-              <input type="password" name="password" placeholder="Enter password" required />
-            </label>
-            <button type="submit">Sign In</button>
-          </form>
-        ) : (
-          <form className="auth-form" onSubmit={handleRegister}>
-            <label>
-              Username
-              <input type="text" name="username" placeholder="Choose username" required />
-            </label>
-            <label>
-              Password
-              <input type="password" name="password" placeholder="Choose password" required />
-            </label>
-            <button type="submit">Create Account</button>
-          </form>
-        )}
-
-        <p className="message" aria-live="polite">{message}</p>
-      </section>
-
-      <section className={`card ${authView ? 'hidden' : ''}`}>
-        <div className="dashboard-header">
-          <div>
-            <p className="eyebrow">Signed in as</p>
-            <h2>{currentUser ? `${currentUser.username} • ${currentUser.role.toUpperCase()}` : ''}</h2>
+    <>
+      <form className="account-editor" onSubmit={save}>
+        <label>Username<input name="username" defaultValue={account.username} required /></label>
+        <RoleFields
+          role={role} region={region} regions={regions}
+          onRoleChange={(event) => setRole(event.target.value)}
+          onRegionChange={(event) => setRegion(event.target.value)}
+        />
+        <label>New password<input name="password" type="password" minLength="8" placeholder="Leave blank to keep" /></label>
+        <div className="editor-action">
+          <div className="editor-buttons">
+            <button disabled={saving}>{saving ? 'Saving...' : 'Save changes'}</button>
+            <button type="button" className="danger-btn" onClick={openDeleteDialog}>Delete user</button>
           </div>
-          <div className="dashboard-actions">
-            <button className="icon-btn" onClick={() => setSettingsOpen((prev) => !prev)} aria-expanded={settingsOpen}>
-              ⚙️
-            </button>
-            <button className="ghost-btn" onClick={handleLogout}>Log Out</button>
-          </div>
+          <span className={rowMessage === 'Saved' ? 'success-text' : 'error-text'}>{rowMessage}</span>
         </div>
+      </form>
 
-        <div className={`settings-panel ${settingsOpen ? 'open' : ''}`}>
-          <div className="settings-card">
-            {settingsItems.map((item) => (
+      {deleteOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) closeDeleteDialog();
+        }}>
+          <section className="delete-dialog" role="dialog" aria-modal="true" aria-labelledby={`delete-title-${account.id}`}>
+            <p className="eyebrow danger-text">Permanent action</p>
+            <h3 id={`delete-title-${account.id}`}>Delete {account.username}?</h3>
+            <p>This permanently removes the account and immediately signs it out of all active sessions.</p>
+            <label>
+              Type <strong>delete</strong> to confirm
+              <input
+                autoFocus
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                placeholder="delete"
+                autoComplete="off"
+              />
+            </label>
+            {deleteError && <p className="delete-error" role="alert">{deleteError}</p>}
+            <div className="dialog-actions">
+              <button type="button" className="ghost-btn" onClick={closeDeleteDialog} disabled={deleting}>Cancel</button>
               <button
-                key={item.key}
                 type="button"
-                className={`settings-link ${view === item.key ? 'active' : ''}`}
-                onClick={() => {
-                  setView(item.key);
-                  setSettingsOpen(false);
-                  setMessage('');
-                }}
+                className="danger-btn danger-solid"
+                disabled={deleteConfirmation !== 'delete' || deleting}
+                onClick={deleteAccount}
               >
-                {item.label}
+                {deleting ? 'Deleting...' : 'Confirm delete'}
               </button>
-            ))}
-          </div>
+            </div>
+          </section>
         </div>
+      )}
+    </>
+  );
+}
 
-        <div id="dashboard-content">
+
+function AdminDashboard({ accounts, regions, onAccountCreated, onAccountSaved, onAccountDeleted }) {
+  const [createRole, setCreateRole] = useState('utilities');
+  const [createRegion, setCreateRegion] = useState(regions[0] || 'texas');
+  const [createMessage, setCreateMessage] = useState('');
+
+  const counts = useMemo(() => accounts.reduce((result, account) => {
+    result[account.role] = (result[account.role] || 0) + 1;
+    return result;
+  }, {}), [accounts]);
+
+  async function createAccount(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    try {
+      const result = await postJson('/api/admin/users', {
+        username: form.get('username'), password: form.get('password'), role: createRole,
+        region: createRole === 'sales_person' ? createRegion : null
+      }, 'Unable to create account.');
+      onAccountCreated(result.user);
+      setCreateMessage('Account created successfully.');
+      formElement.reset();
+      setCreateRole('utilities');
+    } catch (error) {
+      setCreateMessage(error.message);
+    }
+  }
+
+  return (
+    <div className="admin-layout">
+      <div className="panel wide-panel">
+        <div className="page-heading">
+          <div><p className="eyebrow">Administrator</p><h3>Role & Credential Management</h3></div>
+          <span className="access-badge">Full account control</span>
+        </div>
+        <div className="stat-grid">
+          <div className="stat-card"><span>Utilities</span><strong>{counts.utilities || 0}</strong></div>
+          <div className="stat-card"><span>Analysts</span><strong>{counts.business_analyst || 0}</strong></div>
+          <div className="stat-card"><span>Sales people</span><strong>{counts.sales_person || 0}</strong></div>
+        </div>
+      </div>
+
+      <div className="panel wide-panel">
+        <h3>Create Utilities or Role Account</h3>
+        <p className="search-hint">Only administrators can create new Utilities, Business Analyst, or Sales Person accounts.</p>
+        <form className="create-account-form" onSubmit={createAccount}>
+          <label>Username<input name="username" minLength="3" required /></label>
+          <label>Temporary password<input name="password" type="password" minLength="8" required /></label>
+          <RoleFields
+            role={createRole} region={createRegion} regions={regions}
+            onRoleChange={(event) => setCreateRole(event.target.value)}
+            onRegionChange={(event) => setCreateRegion(event.target.value)}
+          />
+          <button>Create account</button>
+        </form>
+        <p className="inline-message">{createMessage}</p>
+      </div>
+
+      <div className="panel wide-panel">
+        <h3>Manage Existing Accounts</h3>
+        <p className="search-hint">Change usernames, roles, sales regions, or set a new password. Blank passwords remain unchanged.</p>
+        <div className="account-list">
+          {accounts.map((account) => (
+            <ManagedAccount
+              key={account.id}
+              account={account}
+              regions={regions}
+              onSaved={onAccountSaved}
+              onDeleted={onAccountDeleted}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function App() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [view, setView] = useState('home');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [dashboardData, setDashboardData] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [config, setConfig] = useState({ regions: ['texas', 'noida', 'alpharetta', 'germany'] });
+  const keycloakLoginUrl = import.meta.env.VITE_KEYCLOAK_LOGIN_URL?.trim();
+
+  useEffect(() => {
+    fetchJson('/api/config').then(setConfig).catch(() => {});
+    fetchJson('/api/me', {}, 'Unable to restore session.')
+      .then((data) => setCurrentUser(data.user))
+      .catch(() => {})
+      .finally(() => setAuthChecked(true));
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setDashboardData(null);
+      setAccounts([]);
+      return;
+    }
+    const endpoints = {
+      utilities: '/api/me/profile',
+      business_analyst: '/api/analytics',
+      sales_person: '/api/sales/region',
+      admin: '/api/admin/users'
+    };
+    const controller = new AbortController();
+    setLoading(true);
+    setMessage('');
+    fetchJson(endpoints[currentUser.role], { signal: controller.signal }, 'Unable to load your dashboard.')
+      .then((data) => {
+        if (currentUser.role === 'admin') setAccounts(data);
+        else setDashboardData(data);
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') setMessage(error.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [currentUser]);
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      const data = await postJson('/api/login', {
+        username: form.get('username'), password: form.get('password')
+      }, 'Login failed.');
+      setCurrentUser(data.user);
+      setView('home');
+      setMessage('');
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  function handleSsoLogin() {
+    setMessage('');
+    if (!keycloakLoginUrl) {
+      setMessage('SSO is not configured yet. Set VITE_KEYCLOAK_LOGIN_URL to enable Keycloak login.');
+      return;
+    }
+    try {
+      const target = new URL(keycloakLoginUrl, window.location.origin);
+      if (!['http:', 'https:'].includes(target.protocol)) throw new Error();
+      window.location.assign(target.href);
+    } catch {
+      setMessage('The configured Keycloak login URL is invalid.');
+    }
+  }
+
+  async function handleLogout() {
+    await fetch('/api/logout', { method: 'POST' });
+    setCurrentUser(null);
+    setView('home');
+    setMessage('');
+  }
+
+  async function handlePasswordChange(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    try {
+      await postJson('/api/password/change', {
+        oldPassword: form.get('oldPassword'), newPassword: form.get('newPassword')
+      }, 'Unable to change password.');
+      setMessage('Password updated successfully.');
+      formElement.reset();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  function updateAccount(updated) {
+    setAccounts((items) => items.map((item) => item.id === updated.id ? updated : item));
+  }
+
+  if (!authChecked) return <main className="app-shell"><section className="card"><p>Loading secure portal...</p></section></main>;
+
+  return (
+    <main className="app-shell">
+      {!currentUser ? (
+        <section className="card auth-card">
+          <div className="brand-block">
+            <p className="eyebrow">Role-Based Authentication</p>
+            <h1>Secure Access Portal</h1>
+            <p>Sign in to your role-specific workspace.</p>
+          </div>
+          <form className="auth-form login-form" onSubmit={handleLogin}>
+            <label>Username<input name="username" placeholder="Enter username" minLength="3" required /></label>
+            <label>Password<input type="password" name="password" placeholder="Enter password" required /></label>
+            <button>Sign In</button>
+          </form>
+          <div className="login-divider" aria-hidden="true"><span>or</span></div>
+          <button type="button" className="sso-btn" onClick={handleSsoLogin}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2 4.5 5.2v5.6c0 4.8 3.1 9.2 7.5 11.2 4.4-2 7.5-6.4 7.5-11.2V5.2L12 2Zm0 3.1 4.5 1.9v3.8c0 3.3-1.8 6.5-4.5 8.1-2.7-1.6-4.5-4.8-4.5-8.1V7L12 5.1Zm0 2.9a2.6 2.6 0 0 0-2.6 2.6c0 .8.4 1.6 1 2v2.3h3.2v-2.3a2.6 2.6 0 0 0-1.6-4.6Z" />
+            </svg>
+            Continue with SSO
+          </button>
+          <p className="privacy-note">Utilities and other role accounts are created by an administrator.</p>
+          <p className="message" aria-live="polite">{message}</p>
+        </section>
+      ) : (
+        <section className="card dashboard-card">
+          <header className="dashboard-header">
+            <div>
+              <p className="eyebrow">Signed in as</p>
+              <h2>{currentUser.username} <span className="header-separator">&bull;</span> {currentUser.roleLabel}</h2>
+              {currentUser.region && <p className="region-label">Assigned region: {currentUser.region}</p>}
+            </div>
+            <nav className="dashboard-actions" aria-label="Account navigation">
+              <button className={view === 'home' ? '' : 'ghost-btn'} onClick={() => { setView('home'); setMessage(''); }}>Dashboard</button>
+              <button className={view === 'password' ? '' : 'ghost-btn'} onClick={() => { setView('password'); setMessage(''); }}>Password</button>
+              <button className="ghost-btn" onClick={handleLogout}>Log Out</button>
+            </nav>
+          </header>
+
           {view === 'password' ? (
             <div className="dashboard-page">
               <div className="panel page-panel">
-                <h3>Change Password</h3>
+                <h3>Change Your Password</h3>
                 <form className="auth-form" onSubmit={handlePasswordChange}>
-                  <label>
-                    Current password
-                    <input type="password" name="oldPassword" placeholder="Enter current password" required />
-                  </label>
-                  <label>
-                    New password
-                    <input type="password" name="newPassword" placeholder="Enter new password" required />
-                  </label>
-                  <button type="submit">Update Password</button>
+                  <label>Current password<input type="password" name="oldPassword" required /></label>
+                  <label>New password<input type="password" name="newPassword" minLength="8" required /></label>
+                  <button>Update Password</button>
                 </form>
               </div>
             </div>
-          ) : view === 'create-admin' ? (
-            <div className="dashboard-page">
-              <div className="panel page-panel">
-                <h3>Create New Admin</h3>
-                <form className="auth-form" onSubmit={handleAdminCreate}>
-                  <label>
-                    New admin username
-                    <input type="text" name="username" placeholder="New admin username" required />
-                  </label>
-                  <label>
-                    New admin password
-                    <input type="password" name="password" placeholder="New admin password" required />
-                  </label>
-                  <button type="submit">Create Admin Account</button>
-                </form>
-              </div>
-            </div>
-          ) : view === 'promote-user' ? (
-            <div className="dashboard-page">
-              <div className="panel page-panel">
-                <h3>Promote Existing User</h3>
-                <form className="auth-form" onSubmit={handleAdminPromote}>
-                  <label>
-                    Existing username
-                    <input type="text" name="username" placeholder="Existing username" required />
-                  </label>
-                  <button type="submit">Make Admin</button>
-                </form>
-              </div>
-            </div>
+          ) : loading ? (
+            <div className="panel"><p>Loading your authorized data...</p></div>
+          ) : currentUser.role === 'admin' ? (
+            <AdminDashboard
+              accounts={accounts} regions={config.regions}
+              onAccountCreated={(account) => setAccounts((items) => [...items, account])}
+              onAccountSaved={updateAccount}
+              onAccountDeleted={(accountId) => setAccounts((items) => items.filter((item) => item.id !== accountId))}
+            />
+          ) : currentUser.role === 'utilities' && dashboardData ? (
+            <UtilitiesDashboard data={dashboardData} />
+          ) : currentUser.role === 'sales_person' && dashboardData ? (
+            <SalesDashboard data={dashboardData} />
+          ) : currentUser.role === 'business_analyst' && dashboardData ? (
+            <AnalystDashboard data={dashboardData} />
           ) : (
-            <div className="dashboard-home">
-              {currentUser?.role === 'admin' ? (
-                <div className="panel center-panel" id="home-panel">
-                  <h3>Search Registered Users</h3>
-                  <p className="search-hint">Find registered accounts from the secure portal.</p>
-                  <label className="search-field">
-                    <span>Search by username</span>
-                    <input
-                      id="user-search-input"
-                      type="text"
-                      placeholder="Type a name..."
-                      autoComplete="off"
-                      value={searchQuery}
-                      onChange={handleSearch}
-                    />
-                  </label>
-
-                  {selectedUser && profileData ? (
-                    <div className="selected-user-panel">
-                      <div className="selected-user-header">
-                        <div>
-                          <p className="eyebrow">Selected user</p>
-                          <h4>{profileData.username}</h4>
-                        </div>
-                        <button type="button" className="ghost-btn" onClick={() => {
-                          setSelectedUser(null);
-                          setProfileData(null);
-                        }}>
-                          Back to search
-                        </button>
-                      </div>
-                      <ProfileCard data={profileData} />
-                    </div>
-                  ) : (
-                    <ul className="search-results">
-                      {searchLoading ? (
-                        <li className="search-empty">Searching users...</li>
-                      ) : searchQuery.trim() && searchResults.length === 0 ? (
-                        <li className="search-empty">No matching users found.</li>
-                      ) : searchQuery.trim() ? (
-                        searchResults.map((user) => (
-                          <li key={user.username}>
-                            <button type="button" className="search-result" onClick={() => loadUserDetail(user.username)}>
-                              <strong>{user.username}</strong>
-                              <span>{user.role}</span>
-                            </button>
-                          </li>
-                        ))
-                      ) : (
-                        <li className="search-empty">Start typing to find registered users.</li>
-                      )}
-                    </ul>
-                  )}
-                </div>
-              ) : profileLoading ? (
-                <div className="panel center-panel"><p className="search-hint">Loading your dashboard...</p></div>
-              ) : profileData ? (
-                <div className="panel center-panel" id="home-panel">
-                  <h3>Your Account</h3>
-                  <p className="search-hint">Welcome back, <strong>{profileData.username}</strong>.</p>
-                  <ProfileCard data={profileData} />
-                </div>
-              ) : (
-                <div className="panel center-panel"><p className="search-hint">Unable to load profile.</p></div>
-              )}
-            </div>
+            <div className="panel"><p>Unable to load this role's dashboard.</p></div>
           )}
-        </div>
-        <p className="message" aria-live="polite">{message}</p>
-      </section>
+          <p className="message" aria-live="polite">{message}</p>
+        </section>
+      )}
     </main>
   );
 }
+
 
 export default App;

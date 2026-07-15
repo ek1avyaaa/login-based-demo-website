@@ -440,3 +440,391 @@ button {
   background: linear-gradient(180deg, var(--accent-soft), var(--accent));
   border-radius: 999px;
 }
+
+.auth-card {
+  width: min(620px, 100%);
+  margin: 0 auto;
+}
+
+.login-form {
+  margin-top: 22px;
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 20px 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.sso-btn {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  background: #ffffff;
+  border: 1px solid var(--border);
+  box-shadow: 0 5px 14px rgba(28, 60, 40, 0.07);
+}
+
+.sso-btn:hover {
+  color: var(--accent-strong);
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.sso-btn svg {
+  width: 21px;
+  height: 21px;
+  fill: currentColor;
+}
+
+.dashboard-card {
+  display: grid;
+  gap: 20px;
+}
+
+.dashboard-card .dashboard-header {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+
+.dashboard-header h2 {
+  margin: 0;
+}
+
+.header-separator,
+.region-label {
+  color: var(--muted);
+}
+
+.region-label {
+  margin: 6px 0 0;
+  text-transform: capitalize;
+}
+
+.wide-panel {
+  width: 100%;
+}
+
+.page-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.page-heading h3,
+.region-card h4 {
+  margin: 0;
+  text-transform: capitalize;
+}
+
+.access-badge,
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  padding: 7px 11px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.stat-card {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #ffffff;
+  display: grid;
+  gap: 8px;
+}
+
+.stat-card span {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.stat-card strong {
+  font-size: 1.35rem;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.privacy-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 14px 0 0;
+}
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.region-card {
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+}
+
+.region-card dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0 0;
+}
+
+.region-card dl div {
+  display: grid;
+  gap: 4px;
+}
+
+.region-card dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.region-card dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.admin-layout,
+.account-list {
+  display: grid;
+  gap: 18px;
+}
+
+.create-account-form,
+.account-editor {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.create-account-form button {
+  min-height: 43px;
+}
+
+.inline-message {
+  min-height: 1.2rem;
+  margin: 10px 0 0;
+  color: var(--accent-strong);
+}
+
+.account-editor {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.editor-action {
+  display: grid;
+  gap: 5px;
+}
+
+.editor-action button {
+  min-height: 43px;
+}
+
+.editor-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.editor-buttons button {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.danger-btn {
+  color: #b42318;
+  background: #fff4f2;
+  border: 1px solid #f3a7a0;
+}
+
+.danger-btn:hover:not(:disabled) {
+  background: #fee4e2;
+}
+
+.danger-solid {
+  color: #ffffff;
+  background: #b42318;
+  border-color: #b42318;
+}
+
+.danger-solid:hover:not(:disabled) {
+  background: #8f1c13;
+}
+
+.danger-text,
+.delete-error {
+  color: #b42318;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(24, 41, 31, 0.58);
+}
+
+.delete-dialog {
+  width: min(480px, 100%);
+  padding: 24px;
+  border-radius: 20px;
+  background: #ffffff;
+  border: 1px solid #f3a7a0;
+  box-shadow: 0 24px 70px rgba(24, 41, 31, 0.28);
+}
+
+.delete-dialog h3 {
+  margin: 0 0 10px;
+}
+
+.delete-dialog > p:not(.eyebrow):not(.delete-error) {
+  color: var(--muted);
+}
+
+.delete-error {
+  margin: 10px 0 0;
+  font-size: 0.88rem;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.success-text,
+.error-text {
+  min-height: 1rem;
+  font-size: 0.78rem;
+}
+
+.success-text {
+  color: var(--accent-strong);
+}
+
+.error-text {
+  color: #a13d3d;
+}
+
+@media (max-width: 820px) {
+  .create-account-form,
+  .account-editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 600px) {
+  body {
+    padding: 10px;
+  }
+
+  .card {
+    padding: 18px;
+    border-radius: 18px;
+  }
+
+  .dashboard-actions,
+  .tabs {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .dashboard-actions button,
+  .tabs button {
+    flex: 1;
+  }
+
+  .page-heading {
+    flex-direction: column;
+  }
+
+  .stat-grid,
+  .analytics-grid,
+  .create-account-form,
+  .account-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
