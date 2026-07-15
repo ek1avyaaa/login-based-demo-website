@@ -14,6 +14,7 @@ From the project root:
 sudo apt install python3.14-venv
 python3 -m venv backend/.venv
 backend/.venv/bin/pip install -r backend/requirements.txt
+sudo apt install npm
 npm install --prefix frontend
 ```
 
