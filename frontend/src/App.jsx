@@ -254,13 +254,17 @@ function ManagedAccount({ account, regions, onSaved, onDeleted }) {
   return (
     <>
       <form className="account-editor" onSubmit={save}>
+        <div className="identity-summary">
+          <strong>{[account.firstName, account.lastName].filter(Boolean).join(' ') || 'No Keycloak name'}</strong>
+          <span>{account.email || 'No Keycloak email'} · {account.emailVerified ? 'Email verified' : 'Email not verified'}</span>
+        </div>
         <label>Username<input name="username" defaultValue={account.username} required /></label>
         <RoleFields
           role={role} region={region} regions={regions}
           onRoleChange={(event) => setRole(event.target.value)}
           onRegionChange={(event) => setRegion(event.target.value)}
         />
-        <label>New password<input name="password" type="password" minLength="8" placeholder="Leave blank to keep" /></label>
+        <label>New local password<input name="password" type="password" minLength="8" placeholder="Leave blank to keep" /></label>
         <div className="editor-action">
           <div className="editor-buttons">
             <button disabled={saving}>{saving ? 'Saving...' : 'Save changes'}</button>
@@ -277,7 +281,10 @@ function ManagedAccount({ account, regions, onSaved, onDeleted }) {
           <section className="delete-dialog" role="dialog" aria-modal="true" aria-labelledby={`delete-title-${account.id}`}>
             <p className="eyebrow danger-text">Permanent action</p>
             <h3 id={`delete-title-${account.id}`}>Delete {account.username}?</h3>
-            <p>This permanently removes the account and immediately signs it out of all active sessions.</p>
+            <p>
+              This removes the account and this portal's Keycloak access, then signs it out
+              of all portal sessions. The shared Keycloak identity and access to other websites remain unchanged.
+            </p>
             <label>
               Type <strong>delete</strong> to confirm
               <input
@@ -308,15 +315,27 @@ function ManagedAccount({ account, regions, onSaved, onDeleted }) {
 }
 
 
-function AdminDashboard({ accounts, regions, onAccountCreated, onAccountSaved, onAccountDeleted }) {
+function AdminDashboard({
+  accounts, regions, keycloakManagementEnabled,
+  onAccountCreated, onAccountSaved, onAccountDeleted
+}) {
   const [createRole, setCreateRole] = useState('utilities');
   const [createRegion, setCreateRegion] = useState(regions[0] || 'texas');
   const [createMessage, setCreateMessage] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState('');
+  const [accountQuery, setAccountQuery] = useState('');
 
   const counts = useMemo(() => accounts.reduce((result, account) => {
     result[account.role] = (result[account.role] || 0) + 1;
     return result;
   }, {}), [accounts]);
+
+  const visibleAccounts = useMemo(() => {
+    const query = accountQuery.trim().toLocaleLowerCase();
+    if (!query) return accounts;
+    return accounts.filter((account) => account.username.toLocaleLowerCase().includes(query));
+  }, [accounts, accountQuery]);
 
   async function createAccount(event) {
     event.preventDefault();
@@ -325,14 +344,40 @@ function AdminDashboard({ accounts, regions, onAccountCreated, onAccountSaved, o
     try {
       const result = await postJson('/api/admin/users', {
         username: form.get('username'), password: form.get('password'), role: createRole,
+        email: form.get('email'), firstName: form.get('firstName'), lastName: form.get('lastName'),
+        emailVerified: form.get('emailVerified') === 'on',
         region: createRole === 'sales_person' ? createRegion : null
       }, 'Unable to create account.');
       onAccountCreated(result.user);
-      setCreateMessage('Account created successfully.');
+      setCreateMessage(result.keycloak?.userCreated
+        ? 'New Keycloak identity created with a temporary password and portal access granted.'
+        : result.keycloak?.profileUpdated
+          ? 'Existing Keycloak identity found. Missing profile details were added, portal access was granted, and existing identity data was preserved.'
+          : 'Existing Keycloak identity found and portal access granted. Its shared Keycloak profile and password were preserved.');
       formElement.reset();
       setCreateRole('utilities');
     } catch (error) {
       setCreateMessage(error.message);
+    }
+  }
+
+  async function reconcileKeycloakAccess() {
+    setSyncing(true);
+    setSyncMessage('');
+    try {
+      const result = await postJson(
+        '/api/admin/keycloak/reconcile', {}, 'Unable to synchronize Keycloak access.'
+      );
+      const summary = result.summary;
+      const unresolved = summary.missingInKeycloak.length + summary.staleBindings.length;
+      setSyncMessage(
+        `Matched ${summary.matched}; granted ${summary.accessGranted}; already granted ${summary.alreadyGranted}`
+        + (unresolved ? `; ${unresolved} account(s) require review.` : '.')
+      );
+    } catch (error) {
+      setSyncMessage(error.message);
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -341,7 +386,9 @@ function AdminDashboard({ accounts, regions, onAccountCreated, onAccountSaved, o
       <div className="panel wide-panel">
         <div className="page-heading">
           <div><p className="eyebrow">Administrator</p><h3>Role & Credential Management</h3></div>
-          <span className="access-badge">Full account control</span>
+          <span className="access-badge">
+            {keycloakManagementEnabled ? 'Keycloak synchronized' : 'Keycloak setup required'}
+          </span>
         </div>
         <div className="stat-grid">
           <div className="stat-card"><span>Utilities</span><strong>{counts.utilities || 0}</strong></div>
@@ -352,25 +399,79 @@ function AdminDashboard({ accounts, regions, onAccountCreated, onAccountSaved, o
 
       <div className="panel wide-panel">
         <h3>Create Utilities or Role Account</h3>
-        <p className="search-hint">Only administrators can create new Utilities, Business Analyst, or Sales Person accounts.</p>
+        <p className="search-hint">
+          Existing Keycloak identities are reused and granted access only to this portal.
+          Otherwise, a new Keycloak identity is created with a temporary password.
+          Username, password, email, first name, last name, and role are required;
+          email verification is optional.
+        </p>
         <form className="create-account-form" onSubmit={createAccount}>
           <label>Username<input name="username" minLength="3" required /></label>
-          <label>Temporary password<input name="password" type="password" minLength="8" required /></label>
+          <label>Email address<input name="email" type="email" maxLength="254" required /></label>
+          <label>First name<input name="firstName" maxLength="80" required /></label>
+          <label>Last name<input name="lastName" maxLength="80" required /></label>
+          <label>Initial/local password<input name="password" type="password" minLength="8" required /></label>
           <RoleFields
             role={createRole} region={createRegion} regions={regions}
             onRoleChange={(event) => setCreateRole(event.target.value)}
             onRegionChange={(event) => setCreateRegion(event.target.value)}
           />
-          <button>Create account</button>
+          <label className="verification-toggle">
+            <input name="emailVerified" type="checkbox" role="switch" />
+            <span className="toggle-control" aria-hidden="true"><span /></span>
+            <span className="toggle-copy"><strong>Email verified (optional)</strong><small>Mark this address verified in Keycloak</small></span>
+          </label>
+          <button disabled={!keycloakManagementEnabled}>Create account</button>
         </form>
+        {!keycloakManagementEnabled && (
+          <p className="error-text">Configure the Keycloak management service account before creating users.</p>
+        )}
         <p className="inline-message">{createMessage}</p>
       </div>
 
       <div className="panel wide-panel">
+        <div className="page-heading">
+          <div>
+            <h3>Existing Account Migration</h3>
+            <p className="search-hint">
+              Grant this portal's client role to all matching existing Keycloak identities,
+              including the portal administrator.
+              Missing users and stale identity links are reported without being changed.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="ghost-btn"
+            disabled={!keycloakManagementEnabled || syncing}
+            onClick={reconcileKeycloakAccess}
+          >
+            {syncing ? 'Synchronizing...' : 'Sync Keycloak access'}
+          </button>
+        </div>
+        <p className="inline-message">{syncMessage}</p>
+      </div>
+
+      <div className="panel wide-panel">
         <h3>Manage Existing Accounts</h3>
-        <p className="search-hint">Change usernames, roles, sales regions, or set a new password. Blank passwords remain unchanged.</p>
+        <p className="search-hint">
+          Portal roles, regions, usernames, and local passwords are website-specific.
+          These changes do not rename the shared Keycloak identity or change its password.
+        </p>
+        <div className="account-search-row">
+          <label>
+            Find user by username
+            <input
+              type="search"
+              value={accountQuery}
+              onChange={(event) => setAccountQuery(event.target.value)}
+              placeholder="Start typing a username"
+              autoComplete="off"
+            />
+          </label>
+          <span>{visibleAccounts.length} of {accounts.length} users</span>
+        </div>
         <div className="account-list">
-          {accounts.map((account) => (
+          {visibleAccounts.map((account) => (
             <ManagedAccount
               key={account.id}
               account={account}
@@ -379,6 +480,9 @@ function AdminDashboard({ accounts, regions, onAccountCreated, onAccountSaved, o
               onDeleted={onAccountDeleted}
             />
           ))}
+          {visibleAccounts.length === 0 && (
+            <p className="empty-search-result">No username matches “{accountQuery.trim()}”.</p>
+          )}
         </div>
       </div>
     </div>
@@ -394,10 +498,20 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [dashboardData, setDashboardData] = useState(null);
   const [accounts, setAccounts] = useState([]);
-  const [config, setConfig] = useState({ regions: ['texas', 'noida', 'alpharetta', 'germany'] });
-  const keycloakLoginUrl = import.meta.env.VITE_KEYCLOAK_LOGIN_URL?.trim();
+  const [config, setConfig] = useState({
+    regions: ['texas', 'noida', 'alpharetta', 'germany'],
+    sso: { enabled: false, loginUrl: '/api/auth/sso/login' }
+  });
+  const keycloakLoginUrl = import.meta.env.VITE_KEYCLOAK_LOGIN_URL?.trim() || config.sso?.loginUrl;
 
   useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const ssoError = query.get('sso_error');
+    if (ssoError) setMessage(ssoError);
+    if (query.has('sso') || query.has('sso_error')) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     fetchJson('/api/config').then(setConfig).catch(() => {});
     fetchJson('/api/me', {}, 'Unable to restore session.')
       .then((data) => setCurrentUser(data.user))
@@ -451,8 +565,8 @@ function App() {
 
   function handleSsoLogin() {
     setMessage('');
-    if (!keycloakLoginUrl) {
-      setMessage('SSO is not configured yet. Set VITE_KEYCLOAK_LOGIN_URL to enable Keycloak login.');
+    if (!import.meta.env.VITE_KEYCLOAK_LOGIN_URL && !config.sso?.enabled) {
+      setMessage('SSO is not configured on the backend yet. Add the Keycloak settings to backend/.env.');
       return;
     }
     try {
@@ -465,10 +579,18 @@ function App() {
   }
 
   async function handleLogout() {
-    await fetch('/api/logout', { method: 'POST' });
-    setCurrentUser(null);
-    setView('home');
-    setMessage('');
+    try {
+      await fetchJson('/api/logout', { method: 'POST' }, 'Unable to log out of the portal.');
+      setCurrentUser(null);
+      setView('home');
+      setMessage('');
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  function handleKeycloakLogout() {
+    window.location.assign('/api/auth/sso/logout');
   }
 
   async function handlePasswordChange(event) {
@@ -523,11 +645,23 @@ function App() {
               <p className="eyebrow">Signed in as</p>
               <h2>{currentUser.username} <span className="header-separator">&bull;</span> {currentUser.roleLabel}</h2>
               {currentUser.region && <p className="region-label">Assigned region: {currentUser.region}</p>}
+              {currentUser.authType === 'oidc' && <span className="access-badge header-auth-badge">Keycloak SSO</span>}
             </div>
             <nav className="dashboard-actions" aria-label="Account navigation">
               <button className={view === 'home' ? '' : 'ghost-btn'} onClick={() => { setView('home'); setMessage(''); }}>Dashboard</button>
-              <button className={view === 'password' ? '' : 'ghost-btn'} onClick={() => { setView('password'); setMessage(''); }}>Password</button>
+              {currentUser.authType !== 'oidc' && (
+                <button className={view === 'password' ? '' : 'ghost-btn'} onClick={() => { setView('password'); setMessage(''); }}>Password</button>
+              )}
               <button className="ghost-btn" onClick={handleLogout}>Log Out</button>
+              {currentUser.authType === 'oidc' && (
+                <button
+                  className="ghost-btn keycloak-logout-btn"
+                  onClick={handleKeycloakLogout}
+                  title="End both the portal session and the Keycloak SSO session"
+                >
+                  Log Out of Keycloak
+                </button>
+              )}
             </nav>
           </header>
 
@@ -547,6 +681,7 @@ function App() {
           ) : currentUser.role === 'admin' ? (
             <AdminDashboard
               accounts={accounts} regions={config.regions}
+              keycloakManagementEnabled={Boolean(config.sso?.userManagementEnabled)}
               onAccountCreated={(account) => setAccounts((items) => [...items, account])}
               onAccountSaved={updateAccount}
               onAccountDeleted={(accountId) => setAccounts((items) => items.filter((item) => item.id !== accountId))}

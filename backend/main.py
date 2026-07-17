@@ -2,21 +2,45 @@ from contextlib import contextmanager
 from functools import lru_cache
 import os
 from pathlib import Path
+import re
 import secrets
 import sqlite3
 from typing import Literal
-
 import bcrypt
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.middleware.sessions import SessionMiddleware
+
+from keycloak_admin import (
+    KeycloakProvisioningError,
+    ensure_portal_user,
+    grant_existing_portal_access,
+    grant_portal_access_by_id,
+    is_keycloak_management_configured,
+    revoke_portal_access,
+)
+from oidc import get_keycloak_issuer, is_oidc_configured
+from session import (
+    clear_session,
+    configure_session_store,
+    create_session,
+    discard_session,
+    get_session,
+    invalidate_user_sessions,
+)
 
 
 DB_PATH = Path(os.getenv("PORTAL_DB_PATH", Path(__file__).resolve().parent / "users.db"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "change-me")
-SESSION_COOKIE = "portal_session"
-SESSION_MAX_AGE = 60 * 60 * 8
+OIDC_SESSION_SECRET = os.getenv("OIDC_SESSION_SECRET", "")
+if is_oidc_configured() and len(OIDC_SESSION_SECRET) < 32:
+    raise RuntimeError(
+        "OIDC_SESSION_SECRET must contain at least 32 characters when SSO is enabled."
+    )
+# Local-only development without SSO still receives a strong, process-scoped key.
+SESSION_SECRET = OIDC_SESSION_SECRET or secrets.token_urlsafe(32)
 
 Role = Literal["admin", "utilities", "business_analyst", "sales_person"]
 REGIONS = ("texas", "noida", "alpharetta", "germany")
@@ -63,39 +87,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    session_cookie="oidc_state",
+    max_age=10 * 60,
+    same_site="lax",
+    https_only=os.getenv("COOKIE_SECURE", "false").lower() == "true",
+)
 
 
 class CredentialsPayload(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=60)
+    password: str = Field(max_length=72)
 
 
 class PasswordPayload(BaseModel):
     oldPassword: str
-    newPassword: str = Field(min_length=8)
+    newPassword: str = Field(min_length=8, max_length=72)
 
 
 class AccountCreatePayload(BaseModel):
     username: str = Field(min_length=3, max_length=60)
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=8, max_length=72)
+    email: str = Field(min_length=3, max_length=254)
+    firstName: str = Field(min_length=1, max_length=80)
+    lastName: str = Field(min_length=1, max_length=80)
+    emailVerified: bool = False
     role: Role
     region: str | None = None
 
 
 class AccountUpdatePayload(BaseModel):
     username: str = Field(min_length=3, max_length=60)
-    password: str | None = Field(default=None, min_length=8, max_length=128)
+    password: str | None = Field(default=None, min_length=8, max_length=72)
     role: Role
     region: str | None = None
 
 
 class DeleteAccountPayload(BaseModel):
     confirmation: str
-
-
-# Session ids contain no user information. The associated user is reloaded from the
-# database on every request so role and region changes take effect immediately.
-session_store: dict[str, int] = {}
 
 
 def get_db():
@@ -118,17 +149,41 @@ def db_connection():
 
 
 def hash_password(password: str):
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    encoded = password.encode()
+    if len(encoded) > 72:
+        raise HTTPException(
+            status_code=422, detail="Password must be no more than 72 UTF-8 bytes."
+        )
+    return bcrypt.hashpw(encoded, bcrypt.gensalt()).decode()
+
+
+def verify_password(password: str, password_hash: str):
+    encoded = password.encode()
+    if len(encoded) > 72:
+        return False
+    return bcrypt.checkpw(encoded, password_hash.encode())
 
 
 def public_user(row):
-    return {
+    data = {
         "id": row["id"],
         "username": row["username"],
         "role": row["role"],
         "roleLabel": ROLE_LABELS.get(row["role"], row["role"]),
         "region": row["region"],
     }
+    if "email" in row.keys():
+        data.update(
+            {
+                "email": row["email"] or "",
+                "firstName": row["first_name"] or "",
+                "lastName": row["last_name"] or "",
+                "emailVerified": bool(row["email_verified"]),
+            }
+        )
+    if "oidc_subject" in row.keys():
+        data["ssoLinked"] = bool(row["oidc_subject"] and row["oidc_issuer"])
+    return data
 
 
 def normalize_region(role: str, region: str | None):
@@ -153,6 +208,20 @@ def clean_username(username: str):
     return value
 
 
+def clean_email(email: str):
+    value = email.strip()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+        raise HTTPException(status_code=422, detail="Enter a valid email address.")
+    return value
+
+
+def clean_name(value: str, label: str):
+    cleaned = " ".join(value.split())
+    if not cleaned or any(ord(character) < 32 for character in cleaned):
+        raise HTTPException(status_code=422, detail=f"Enter a valid {label}.")
+    return cleaned
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with db_connection() as conn:
@@ -170,12 +239,32 @@ def init_db():
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
         if "region" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN region TEXT")
+        if "oidc_subject" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN oidc_subject TEXT")
+        if "oidc_issuer" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN oidc_issuer TEXT")
+        if "email" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        if "first_name" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
+        if "last_name" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN last_name TEXT")
+        if "email_verified" not in columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0"
+            )
 
         # Migrate the former user role without invalidating existing accounts.
         conn.execute("UPDATE users SET role = 'utilities' WHERE role = 'user'")
+        conn.execute("DROP INDEX IF EXISTS idx_users_username_nocase")
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_users_username_nocase "
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username_nocase "
             "ON users (username COLLATE NOCASE)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_oidc_identity "
+            "ON users (oidc_issuer, oidc_subject) "
+            "WHERE oidc_issuer IS NOT NULL AND oidc_subject IS NOT NULL"
         )
         conn.execute(
             """
@@ -250,37 +339,126 @@ def get_user_by_username(username: str):
         ).fetchone()
 
 
-def create_user(username: str, password: str, role: str, region: str | None = None):
+def resolve_oidc_user(issuer: str, subject: str, username: str):
+    """Resolve and permanently bind a trusted OIDC identity to a portal account."""
+    issuer = issuer.strip().rstrip("/")
+    subject = subject.strip()
+    username = username.strip()
+    if not issuer or not subject or not username:
+        raise HTTPException(status_code=403, detail="Keycloak identity is incomplete.")
+
+    with db_connection() as conn:
+        row = conn.execute(
+            "SELECT id, username, password, role, region, oidc_issuer, oidc_subject "
+            "FROM users WHERE oidc_issuer = ? AND oidc_subject = ?",
+            (issuer, subject),
+        ).fetchone()
+        if row:
+            return row
+
+        row = conn.execute(
+            "SELECT id, username, password, role, region, oidc_issuer, oidc_subject "
+            "FROM users WHERE username = ? COLLATE NOCASE",
+            (username,),
+        ).fetchone()
+        if not row:
+            return None
+        if row["oidc_subject"] or row["oidc_issuer"]:
+            raise HTTPException(
+                status_code=403,
+                detail="This portal account is linked to a different SSO identity.",
+            )
+
+        try:
+            cursor = conn.execute(
+                "UPDATE users SET oidc_issuer = ?, oidc_subject = ? "
+                "WHERE id = ? AND oidc_issuer IS NULL AND oidc_subject IS NULL",
+                (issuer, subject, row["id"]),
+            )
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(
+                status_code=403,
+                detail="This SSO identity is linked to a different portal account.",
+            ) from error
+
+        if cursor.rowcount != 1:
+            linked = conn.execute(
+                "SELECT oidc_issuer, oidc_subject FROM users WHERE id = ?", (row["id"],)
+            ).fetchone()
+            if not linked or (linked["oidc_issuer"], linked["oidc_subject"]) != (
+                issuer,
+                subject,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="This portal account is linked to a different SSO identity.",
+                )
+
+        return conn.execute(
+            "SELECT id, username, password, role, region, oidc_issuer, oidc_subject "
+            "FROM users WHERE id = ?",
+            (row["id"],),
+        ).fetchone()
+
+
+def create_user(
+    username: str,
+    password: str,
+    role: str,
+    region: str | None = None,
+    oidc_issuer: str | None = None,
+    oidc_subject: str | None = None,
+    email: str | None = None,
+    first_name: str = "",
+    last_name: str = "",
+    email_verified: bool = False,
+):
     username = clean_username(username)
     region = normalize_region(role, region)
-    with db_connection() as conn:
-        if conn.execute(
-            "SELECT 1 FROM users WHERE username = ? COLLATE NOCASE", (username,)
-        ).fetchone():
-            raise HTTPException(status_code=409, detail="That username is already taken.")
-        cursor = conn.execute(
-            "INSERT INTO users (username, password, role, region) VALUES (?, ?, ?, ?)",
-            (username, hash_password(password), role, region),
-        )
-        row = conn.execute(
-            "SELECT id, username, role, region FROM users WHERE id = ?", (cursor.lastrowid,)
-        ).fetchone()
+    try:
+        with db_connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO users "
+                "(username, password, role, region, oidc_issuer, oidc_subject, "
+                "email, first_name, last_name, email_verified) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    username,
+                    hash_password(password),
+                    role,
+                    region,
+                    oidc_issuer,
+                    oidc_subject,
+                    email,
+                    first_name,
+                    last_name,
+                    int(email_verified),
+                ),
+            )
+            row = conn.execute(
+                "SELECT id, username, role, region, oidc_issuer, oidc_subject, "
+                "email, first_name, last_name, email_verified "
+                "FROM users WHERE id = ?",
+                (cursor.lastrowid,),
+            ).fetchone()
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409, detail="That username is already taken.") from error
     return public_user(row)
 
 
 def current_user(request: Request):
-    token = request.cookies.get(SESSION_COOKIE)
-    user_id = session_store.get(token or "")
-    if not user_id:
+    portal_session = get_session(request)
+    if not portal_session:
         raise HTTPException(status_code=401, detail="Not authenticated.")
     with db_connection() as conn:
         row = conn.execute(
-            "SELECT id, username, role, region FROM users WHERE id = ?", (user_id,)
+            "SELECT id, username, role, region FROM users WHERE id = ?",
+            (portal_session.user_id,),
         ).fetchone()
     if not row:
-        session_store.pop(token, None)
+        discard_session(request)
         raise HTTPException(status_code=401, detail="Not authenticated.")
-    return public_user(row)
+    return {**public_user(row), "authType": portal_session.auth_type}
 
 
 def require_role(request: Request, *roles: str):
@@ -310,11 +488,20 @@ def get_meter_profile(username: str):
 
 
 init_db()
+configure_session_store(DB_PATH, SESSION_SECRET)
 
 
 @app.get("/api/config")
 def get_config():
-    return {"roles": ROLE_LABELS, "regions": list(REGIONS)}
+    return {
+        "roles": ROLE_LABELS,
+        "regions": list(REGIONS),
+        "sso": {
+            "enabled": is_oidc_configured(),
+            "loginUrl": "/api/auth/sso/login",
+            "userManagementEnabled": is_keycloak_management_configured(),
+        },
+    }
 
 
 @app.get("/api/me")
@@ -323,45 +510,42 @@ def get_me(request: Request):
 
 
 @app.post("/api/login")
-def login(payload: CredentialsPayload, response: Response):
+def login(payload: CredentialsPayload, request: Request, response: Response):
     user_row = get_user_by_username(payload.username)
-    if not user_row or not bcrypt.checkpw(
-        payload.password.encode(), user_row["password"].encode()
-    ):
+    if not user_row or not verify_password(payload.password, user_row["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials.")
-    token = secrets.token_urlsafe(32)
-    session_store[token] = user_row["id"]
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        max_age=SESSION_MAX_AGE,
-        httponly=True,
-        samesite="lax",
-        secure=os.getenv("COOKIE_SECURE", "false").lower() == "true",
-    )
-    return {"success": True, "user": public_user(user_row)}
+    discard_session(request)
+    create_session(response, user_row["id"], auth_type="local")
+    return {
+        "success": True,
+        "user": {**public_user(user_row), "authType": "local"},
+    }
 
 
 @app.post("/api/logout")
 def logout(request: Request, response: Response):
-    token = request.cookies.get(SESSION_COOKIE)
-    if token:
-        session_store.pop(token, None)
-    response.delete_cookie(SESSION_COOKIE)
+    clear_session(request, response)
     return {"success": True}
 
 
 @app.post("/api/password/change")
-def change_password(payload: PasswordPayload, request: Request):
+def change_password(payload: PasswordPayload, request: Request, response: Response):
     user = current_user(request)
+    if user["authType"] == "oidc":
+        raise HTTPException(
+            status_code=403,
+            detail="Password changes for SSO accounts are managed in Keycloak.",
+        )
     with db_connection() as conn:
         row = conn.execute("SELECT password FROM users WHERE id = ?", (user["id"],)).fetchone()
-        if not row or not bcrypt.checkpw(payload.oldPassword.encode(), row["password"].encode()):
+        if not row or not verify_password(payload.oldPassword, row["password"]):
             raise HTTPException(status_code=401, detail="Current password is incorrect.")
         conn.execute(
             "UPDATE users SET password = ? WHERE id = ?",
             (hash_password(payload.newPassword), user["id"]),
         )
+    invalidate_user_sessions(user["id"])
+    create_session(response, user["id"], auth_type="local")
     return {"success": True}
 
 
@@ -419,7 +603,8 @@ def admin_users(request: Request):
     with db_connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, username, role, region FROM users
+            SELECT id, username, role, region, oidc_issuer, oidc_subject,
+                   email, first_name, last_name, email_verified FROM users
             WHERE id != ? AND role != 'admin'
             ORDER BY role, username COLLATE NOCASE
             """,
@@ -429,11 +614,131 @@ def admin_users(request: Request):
 
 
 @app.post("/api/admin/users")
-def admin_create_user(payload: AccountCreatePayload, request: Request):
+async def admin_create_user(payload: AccountCreatePayload, request: Request):
     require_role(request, "admin")
     if payload.role == "admin":
         raise HTTPException(status_code=422, detail="Use the dedicated admin account flow for administrators.")
-    return {"success": True, "user": create_user(payload.username, payload.password, payload.role, payload.region)}
+    username = clean_username(payload.username)
+    email = clean_email(payload.email)
+    first_name = clean_name(payload.firstName, "first name")
+    last_name = clean_name(payload.lastName, "last name")
+    if get_user_by_username(username):
+        raise HTTPException(status_code=409, detail="That username is already taken.")
+
+    try:
+        provisioning = await ensure_portal_user(
+            username,
+            payload.password,
+            email,
+            first_name,
+            last_name,
+            payload.emailVerified,
+        )
+    except KeycloakProvisioningError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    try:
+        user = create_user(
+            username,
+            payload.password,
+            payload.role,
+            payload.region,
+            oidc_issuer=get_keycloak_issuer(),
+            oidc_subject=provisioning.user_id,
+            email=provisioning.email,
+            first_name=provisioning.first_name,
+            last_name=provisioning.last_name,
+            email_verified=provisioning.email_verified,
+        )
+    except Exception:
+        if provisioning.access_granted:
+            try:
+                await revoke_portal_access(username, provisioning.user_id)
+            except KeycloakProvisioningError:
+                pass
+        raise
+
+    return {
+        "success": True,
+        "user": user,
+        "keycloak": {
+            "userCreated": provisioning.user_created,
+            "accessGranted": provisioning.access_granted,
+            "identityPreserved": True,
+            "profilePreserved": not provisioning.user_created,
+            "profileUpdated": provisioning.profile_updated,
+        },
+    }
+
+
+@app.post("/api/admin/keycloak/reconcile")
+async def admin_reconcile_keycloak_access(request: Request):
+    require_role(request, "admin")
+    with db_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, username, oidc_issuer, oidc_subject FROM users "
+            "ORDER BY username COLLATE NOCASE"
+        ).fetchall()
+
+    summary = {
+        "matched": 0,
+        "accessGranted": 0,
+        "alreadyGranted": 0,
+        "missingInKeycloak": [],
+        "staleBindings": [],
+    }
+    for row in rows:
+        if row["oidc_issuer"] and not row["oidc_subject"]:
+            summary["staleBindings"].append(row["username"])
+            continue
+        try:
+            result = await grant_existing_portal_access(
+                row["username"], row["oidc_subject"]
+            )
+        except KeycloakProvisioningError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+        if not result:
+            target = (
+                summary["staleBindings"]
+                if row["oidc_subject"]
+                else summary["missingInKeycloak"]
+            )
+            target.append(row["username"])
+            continue
+
+        summary["matched"] += 1
+        if result.access_granted:
+            summary["accessGranted"] += 1
+        else:
+            summary["alreadyGranted"] += 1
+
+        with db_connection() as conn:
+            conn.execute(
+                "UPDATE users SET email = ?, first_name = ?, last_name = ?, "
+                "email_verified = ? WHERE id = ?",
+                (
+                    result.email,
+                    result.first_name,
+                    result.last_name,
+                    int(result.email_verified),
+                    row["id"],
+                ),
+            )
+            if not row["oidc_subject"] and not row["oidc_issuer"]:
+                conn.execute(
+                    "UPDATE users SET oidc_issuer = ?, oidc_subject = ? "
+                    "WHERE id = ? AND oidc_issuer IS NULL AND oidc_subject IS NULL",
+                    (get_keycloak_issuer(), result.user_id, row["id"]),
+                )
+            elif row["oidc_subject"] and row["oidc_issuer"] != get_keycloak_issuer():
+                conn.execute(
+                    "UPDATE users SET oidc_issuer = ? "
+                    "WHERE id = ? AND oidc_subject = ?",
+                    (get_keycloak_issuer(), row["id"], result.user_id),
+                )
+
+    return {"success": True, "summary": summary}
 
 
 @app.put("/api/admin/users/{user_id}")
@@ -466,40 +771,58 @@ def admin_update_user(user_id: int, payload: AccountUpdatePayload, request: Requ
                 (username, payload.role, region, user_id),
             )
         row = conn.execute(
-            "SELECT id, username, role, region FROM users WHERE id = ?", (user_id,)
+            "SELECT id, username, role, region, email, first_name, last_name, "
+            "email_verified FROM users WHERE id = ?", (user_id,)
         ).fetchone()
+    if payload.password:
+        invalidate_user_sessions(user_id)
     get_meter_profile.cache_clear()
     return {"success": True, "user": public_user(row)}
 
 
 @app.delete("/api/admin/users/{user_id}")
-def admin_delete_user(user_id: int, payload: DeleteAccountPayload, request: Request):
+async def admin_delete_user(user_id: int, payload: DeleteAccountPayload, request: Request):
     require_role(request, "admin")
     if payload.confirmation != "delete":
         raise HTTPException(status_code=422, detail='Type "delete" to confirm account deletion.')
     with db_connection() as conn:
         target = conn.execute(
-            "SELECT id, username, role FROM users WHERE id = ?", (user_id,)
+            "SELECT id, username, role, oidc_subject FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         if not target or target["role"] == "admin":
             raise HTTPException(status_code=404, detail="Managed account not found.")
-        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+    try:
+        revocation = await revoke_portal_access(
+            target["username"], target["oidc_subject"]
+        )
+    except KeycloakProvisioningError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    try:
+        with db_connection() as conn:
+            deleted = conn.execute(
+                "DELETE FROM users WHERE id = ? AND role != 'admin'", (user_id,)
+            )
+            if deleted.rowcount != 1:
+                raise HTTPException(status_code=409, detail="The account changed; retry deletion.")
+    except Exception:
+        if revocation.access_revoked and revocation.user_id:
+            try:
+                await grant_portal_access_by_id(revocation.user_id)
+            except KeycloakProvisioningError:
+                pass
+        raise
 
     # Immediately sign the deleted account out on every active browser session.
-    for token, session_user_id in list(session_store.items()):
-        if session_user_id == user_id:
-            session_store.pop(token, None)
+    invalidate_user_sessions(user_id)
     get_meter_profile.cache_clear()
-    return {"success": True, "deletedUser": target["username"]}
-
-
-# Backward-compatible admin creation endpoint retained for the original UI/API.
-@app.post("/api/admin/add")
-def add_admin(payload: CredentialsPayload, request: Request):
-    require_role(request, "admin")
-    if len(payload.password) < 8:
-        raise HTTPException(status_code=422, detail="Password must be at least 8 characters.")
-    return {"success": True, "user": create_user(payload.username, payload.password, "admin")}
+    return {
+        "success": True,
+        "deletedUser": target["username"],
+        "keycloakAccessRevoked": revocation.access_revoked,
+        "keycloakIdentityPreserved": True,
+    }
 
 
 @app.get("/api/users/search")
@@ -529,3 +852,9 @@ def user_detail(username: str, request: Request):
     if row["role"] == "utilities":
         data["profile"] = get_meter_profile(row["username"])
     return data
+
+# Imported after the account/session helpers so the OIDC router can reuse them
+# without duplicating the portal's authorization model.
+from sso import build_sso_router  # noqa: E402
+
+app.include_router(build_sso_router(resolve_oidc_user))
